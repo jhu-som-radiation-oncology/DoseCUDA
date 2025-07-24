@@ -270,9 +270,13 @@ class IMRTPlan(Plan):
             elif line.startswith('mlc_transmission'):
                 beam_model.mlc_transmission = float(line.split(',')[1])
 
-    def readPlanDicom(self, plan_path):
+    def readPlanDicom(self, plan):
 
-        ds = pyd.dcmread(plan_path, force=True)
+        if not isinstance(plan, pyd.Dataset):
+            ds = pyd.dcmread(plan, force=True)
+        else:
+            ds = plan
+
         total_mu = ds.FractionGroupSequence[0].ReferencedBeamSequence[0].BeamMeterset
 
         self.n_fractions = float(ds.FractionGroupSequence[0].NumberOfFractionsPlanned)

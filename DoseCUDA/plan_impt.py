@@ -632,9 +632,13 @@ class IMPTPlan(Plan):
         # Save the DICOM file
         ds.save_as(output_file, write_like_original=False)
 
-    def readPlanDicom(self, plan_path):
+    def readPlanDicom(self, plan):
 
-        ds = pyd.dcmread(plan_path, force=True)
+        if not isinstance(plan, pyd.Dataset):
+            ds = pyd.dcmread(plan, force=True)
+        else:
+            ds = plan
+
         n_beams = len(ds.IonBeamSequence)
         self.n_fractions = float(ds.FractionGroupSequence[0].NumberOfFractionsPlanned)
         self.beam_list = []
