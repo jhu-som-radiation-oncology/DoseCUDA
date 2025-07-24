@@ -1,6 +1,8 @@
 import numpy as np
 import SimpleITK as sitk
 import pydicom as pyd
+import pydicom.uid
+from .rtdose import RTDoseFactory
 
 
 class VolumeObject:
@@ -92,13 +94,14 @@ class DoseGrid:
 
         HU_resampled = rf.Execute(HU_img)
         self.HU = np.array(sitk.GetArrayFromImage(HU_resampled), dtype=np.single)
-        
+
         self.spacing = sp_new
         self.size = np.array(self.HU.shape)
 
-    def resampleCTfromReferenceDose(self, ref_dose_path):
+    def resampleCTfromReferenceDose(self, ref_dose):
 
-        ref_dose = pyd.dcmread(ref_dose_path, force=True)
+        if not isinstance(ref_dose, pydicom.Dataset):
+            ref_dose = pyd.dcmread(ref_dose, force=True)
         slice_thickness = float(ref_dose.GridFrameOffsetVector[1]) - float(ref_dose.GridFrameOffsetVector[0])
         ref_spacing = np.array([float(ref_dose.PixelSpacing[0]), float(ref_dose.PixelSpacing[1]), slice_thickness])
         ref_origin = np.array(ref_dose.ImagePositionPatient)
@@ -130,6 +133,47 @@ class DoseGrid:
 
         self.HU[:, -n_voxels:, :] = hu_override_value
 
+    def streamDoseDCM(self, ref, dose_type="EFFECTIVE", individual_beams=False):
+        """Flush the dose volume to a DICOM RTDose dataset"""
+        def stream_ref_rtdose(beam_dose, ref_dose, beam_num):
+            """Stream a buffer of pixel data into a DICOM dataset into memory"""
+            ref_dose.SeriesDescription = ref_dose.SeriesDescription + "_DoseCUDA"
+            ref_dose.DoseSummationType = "BEAM"
+            ref_dose.DoseType = dose_type
+            ref_dose.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID = pyd.uid.generate_uid()
+
+            scal = np.iinfo(np.uint16).max / np.max(beam_dose)
+            dose_dcm = np.array(beam_dose * scal * RBE, dtype=np.uint16)
+            ref_dose.PixelData = dose_dcm.tobytes()
+            ref_dose.DoseGridScaling = 1.0 / scal
+            ref_dose.PixelSpacing = [self.spacing[0], self.spacing[1]]
+
+            return ref_dose
+
+        if dose_type == "EFFECTIVE":
+            RBE = 1.1
+        elif dose_type == "PHYSICAL":
+            RBE = 1.0
+        else:
+            raise Exception(f"Unknown dose type: {dose_type}")
+
+        if not isinstance(ref, pydicom.Dataset):
+            ref = pyd.dcmread(ref, force=True)
+
+        if ref.SOPClassUID == pydicom.uid.RTDoseStorage:
+            stream_function = stream_ref_rtdose
+        elif ref.SOPClassUID == pydicom.uid.RTIonPlanStorage:
+            fac = RTDoseFactory(ref)
+            stream_function = lambda dose, ref, inst: fac.create_rtdose(dose, self.origin, self.spacing, self.size, dose_type, inst)
+        else:
+            raise Exception("DICOM template SOP class is invalid")
+
+        if individual_beams:
+            for i, beam_dose in enumerate(self.beam_doses):
+                yield stream_function(beam_dose, ref, i + 1)
+        else:
+            yield stream_function(self.dose, ref, 0)
+
     def writeDoseDCM(self, dose_path, ref_dose_path, dose_type="EFFECTIVE", individual_beams=False):
 
         if not dose_path.endswith(".dcm"):
@@ -137,44 +181,17 @@ class DoseGrid:
         else:
             print("test")
 
-        if dose_type == "EFFECTIVE":
-            RBE = 1.1
-        elif dose_type == "PHYSICAL":
-            RBE = 1.0
-        else:
-            raise Exception("Unknown dose type: %s" % dose_type)
-
-        if individual_beams:
-            for i, beam_dose in enumerate(self.beam_doses):
-                ref_dose = pyd.dcmread(ref_dose_path, force=True)
-                ref_dose.SeriesDescription = ref_dose.SeriesDescription + "_DoseCUDA"
-                ref_dose.DoseSummationType = "BEAM"
-                ref_dose.DoseType = dose_type
-                ref_dose.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID = pyd.uid.generate_uid()
-
-                dose_dcm = np.array(beam_dose * 500.0 * RBE, dtype=np.uint16)
-                ref_dose.PixelData = dose_dcm
-                ref_dose.DoseGridScaling = 0.002
-
-                ref_dose.save_as(dose_path.replace(".dcm", "_beam%02i.dcm" % (i+1)))
-        else:
-            ref_dose = pyd.dcmread(ref_dose_path, force=True)
-            ref_dose.SeriesDescription = ref_dose.SeriesDescription + "_DoseCUDA"
-            ref_dose.DoseSummationType = "PLAN"
-            ref_dose.DoseType = dose_type
-            ref_dose.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID = pyd.uid.generate_uid()
-            
-            dose_dcm = np.array(self.dose * 500.0 * RBE, dtype=np.uint16)
-            ref_dose.PixelData = dose_dcm
-            ref_dose.DoseGridScaling = 0.002
-
-            ref_dose.save_as(dose_path)
+        for i, dose in enumerate(self.streamDoseDCM(ref_dose_path, dose_type, individual_beams)):
+            path = dose_path
+            if individual_beams:
+                path = path.replace(".dcm", "_beam%02i.dcm" % (i + 1))
+            dose.save_as(path, enforce_file_format=True, implicit_vr=True, little_endian=True)
 
     def writeDoseNRRD(self, dose_path, individual_beams=False, dose_type="EFFECTIVE"):
 
         if not dose_path.endswith(".nrrd"):
             raise Exception("Dose path must have .nrrd extension")
-        
+
         if dose_type == "EFFECTIVE":
             RBE = 1.1
         elif dose_type == "PHYSICAL":
