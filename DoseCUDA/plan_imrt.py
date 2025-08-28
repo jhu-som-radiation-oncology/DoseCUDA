@@ -272,7 +272,7 @@ class IMRTPlan(Plan):
 
     def readPlanDicom(self, plan_path):
 
-        ds = pyd.dcmread(plan_path)
+        ds = pyd.dcmread(plan_path, force=True)
         total_mu = ds.FractionGroupSequence[0].ReferencedBeamSequence[0].BeamMeterset
 
         self.n_fractions = float(ds.FractionGroupSequence[0].NumberOfFractionsPlanned)

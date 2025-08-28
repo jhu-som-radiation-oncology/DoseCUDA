@@ -156,14 +156,14 @@ def print_lookup_tables(energy_index, fitting_params, beam_energies, r80s, all_s
 def import_dicom_data(dcm_directory):
     
     dcm_files = [f for f in os.listdir(dcm_directory) if f.endswith('.dcm')]
-    plan_files = [f for f in dcm_files if 'RTPLAN' in pyd.dcmread(os.path.join(dcm_directory, f)).Modality]
-    dose_files = [f for f in dcm_files if 'RTDOSE' in pyd.dcmread(os.path.join(dcm_directory, f)).Modality]
+    plan_files = [f for f in dcm_files if 'RTPLAN' in pyd.dcmread(os.path.join(dcm_directory, f), force=True).Modality]
+    dose_files = [f for f in dcm_files if 'RTDOSE' in pyd.dcmread(os.path.join(dcm_directory, f), force=True).Modality]
 
     if len(plan_files) != 1:
         print("Error: there should be exactly one RTPLAN file in the directory")
         sys.exit(1)
 
-    plan = pyd.dcmread(os.path.join(dcm_directory, plan_files[0]))
+    plan = pyd.dcmread(os.path.join(dcm_directory, plan_files[0]), force=True)
     nbeams = len(plan.IonBeamSequence)
 
     if nbeams == 0:
@@ -215,7 +215,7 @@ def import_dicom_data(dcm_directory):
     for dose_file in dose_files:
         
         print("Importing dose file: %s" % dose_file)
-        dose = pyd.dcmread(os.path.join(dcm_directory, dose_file))
+        dose = pyd.dcmread(os.path.join(dcm_directory, dose_file), force=True)
 
         if dose.DoseType != 'PHYSICAL':
             print("Error: dicom file %s is not a physical dose" % dose_file)

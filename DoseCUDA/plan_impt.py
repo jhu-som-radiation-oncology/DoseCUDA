@@ -1,4 +1,4 @@
-from .plan import Plan, Beam, DoseGrid, VolumeObject
+from .plan import Plan, Beam, DoseGrid, VolumeObject, Prescription
 import sys
 import os
 sys.path.append(os.path.dirname(__file__))
@@ -12,6 +12,52 @@ import pkg_resources
 import dose_kernels
 import os
 import SimpleITK as sitk
+
+
+def get_roi_num(rt_ds, ROIName):
+    for roi in rt_ds.StructureSetROISequence:
+        if roi.ROIName == ROIName:
+            return roi.ROINumber
+    return None
+
+
+def create_dose_reference(ds, prescriptions, rt_struct_file=None):
+    # Initialize Dose Reference Sequence if not present
+    if not hasattr(ds, 'DoseReferenceSequence'):
+        ds.DoseReferenceSequence = []
+
+    # Process RT structure file if provided
+    rt_ds = pyd.dcmread(rt_struct_file, force=True) if rt_struct_file else None
+
+    for i, rx in enumerate(prescriptions):
+        # Determine ROI number
+        if rt_struct_file:
+            ptv_roi_num = get_roi_num(rt_ds, rx.ROIName)
+            if ptv_roi_num is None:
+                raise ValueError(f"No structure labelled '{rx.ROIName}' found in RT structure set.")
+        else:
+            ptv_roi_num = i + 1
+
+        # Create Dose Reference dataset
+        dr = Dataset()
+        dr.DoseReferenceNumber = len(ds.DoseReferenceSequence) + 1
+        dr.ReferencedROINumber = ptv_roi_num
+        dr.DoseReferenceStructureType = 'VOLUME'
+        dr.DoseReferenceDescription = f'{rx.ROIName} Prescription'
+        dr.DoseReferenceType = 'TARGET'
+        dr.TargetPrescriptionDose = rx.TargetPrescriptionDose
+        dr.TargetUnderdoseVolumeFraction = rx.TargetUnderdoseVolumeFraction
+        dr.add_new((0x4001, 0x0010), 'LO', 'RAYSEARCHLABS 2.0')
+        dr.add_new((0x4001, 0x1011), 'UN', str(rx.TargetPrescriptionDose).encode())
+
+        ds.DoseReferenceSequence.append(dr)
+
+    # Set Referenced SOP Instance UID if RT structure file is provided
+    if rt_struct_file:
+        rss = ds.ReferencedStructureSetSequence[0]
+        rss.ReferencedSOPInstanceUID = rt_ds.SOPInstanceUID
+
+    return ds
 
 
 class IMPTBeamModel():
@@ -300,7 +346,7 @@ class IMPTPlan(Plan):
         files = [os.path.join(ct_dir, f)
                 for f in os.listdir(ct_dir)
                 if f.lower().endswith('.dcm')]
-        dsets = [pyd.dcmread(f) for f in files]
+        dsets = [pyd.dcmread(f, force=True) for f in files]
         dsets.sort(key=lambda ds: ds.InstanceNumber)
         return dsets
 
@@ -332,7 +378,10 @@ class IMPTPlan(Plan):
         ds.SOPClassUID = RTIonPlanStorage
         ds.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
         ds.Modality       = 'RTPLAN'
-        ds.RTPlanLabel    = 'IMPT_PencilBeam'
+        if self.RTPlanLabel:
+            ds.RTPlanLabel    = self.RTPlanLabel
+        else:
+            ds.RTPlanLabel    = 'IMPT_PencilBeam'
         ds.RTPlanDate     = datetime.date.today().strftime('%Y%m%d')
         ds.RTPlanTime     = datetime.datetime.now().strftime('%H%M%S.%f')
         ds.RTPlanGeometry = 'PATIENT'
@@ -342,9 +391,8 @@ class IMPTPlan(Plan):
 
         # Emulate RayStation top-level attributes
         ds.Manufacturer = 'RaySearch Laboratories'
-        # ds.ManufacturersModelName = 'RayStation'
-        ds.PlanIntent = 'CURATIVE'  # Emulate example
-        ds.TreatmentProtocols = ['PencilBeamScanning']  # Emulate example
+        ds.PlanIntent = 'CURATIVE'
+        ds.TreatmentProtocols = ['PencilBeamScanning'] 
         ds.PatientIdentityRemoved = 'YES'
         ds.DeidentificationMethod = 'RayStation Custom Export'
 
@@ -358,43 +406,20 @@ class IMPTPlan(Plan):
         rss.ReferencedSOPClassUID = '1.2.840.10008.5.1.4.1.1.481.3'
         rss.ReferencedSOPInstanceUID = generate_uid()  # Replace with actual if available
 
-        # Dose Reference Sequence (for referenced in CPs)
-        if rt_struct_file:
-            rt_ds = pyd.dcmread(rt_struct_file)
-            rss.ReferencedSOPInstanceUID = rt_ds.SOPInstanceUID
-            ptv_roi_num = None
-            for roi in rt_ds.StructureSetROISequence:
-                if roi.ROIName == "PTV":
-                    ptv_roi_num = roi.ROINumber
-                    break
-            if ptv_roi_num is None:
-                raise ValueError("No structure labelled 'PTV' found in the provided RT structure set.")
-
-            # Dose Reference Sequence (reference PTV)
-            ds.DoseReferenceSequence = [Dataset()]
-            dr = ds.DoseReferenceSequence[0]
-            dr.DoseReferenceNumber = 1
-            dr.ReferencedROINumber = ptv_roi_num
-            dr.DoseReferenceStructureType = 'VOLUME'
-            dr.DoseReferenceDescription = 'PTV Prescription'
-            dr.DoseReferenceType = 'TARGET'
-            dr.TargetPrescriptionDose = 60
-            dr.TargetUnderdoseVolumeFraction = 2
-            dr.add_new((0x4001, 0x0010), 'LO', 'RAYSEARCHLABS 2.0')
-            dr.add_new((0x4001, 0x1011), 'UN', '{0}'.format(60).encode())
+        # check if Prescriptions is empty
+        prescriptions = []
+        if not self.Prescriptions:
+            rx = Prescription()
+            rx.TargetPrescriptionDose = self.n_fractions * 2.0 # assume 2 Gy per fraction as default
+            rx.ROIName = "PTV"
+            rx.TargetUnderdoseVolumeFraction = 2.0
+            prescriptions.append(rx)
         else:
-            # Dose Reference Sequence (for referenced in CPs) - original hardcoded
-            ds.DoseReferenceSequence = [Dataset(), Dataset()]
-            for i, dr in enumerate(ds.DoseReferenceSequence):
-                dr.DoseReferenceNumber = i + 1
-                dr.ReferencedROINumber = i + 1
-                dr.DoseReferenceStructureType = 'VOLUME'
-                dr.DoseReferenceDescription = f'Dose Reference {i + 1}'
-                dr.DoseReferenceType = 'TARGET'
-                dr.TargetPrescriptionDose = 60
-                dr.TargetUnderdoseVolumeFraction = 2
-                dr.add_new((0x4001, 0x0010), 'LO', 'RAYSEARCHLABS 2.0')
-                dr.add_new((0x4001, 0x1011), 'UN', '{0}'.format(60).encode())
+            for rx in self.Prescriptions:
+                prescriptions.append(rx)
+
+        # populate prescriptions
+        ds = create_dose_reference(ds, prescriptions, rt_struct_file)
 
         # Fraction Group Sequence
         ds.FractionGroupSequence = [Dataset()]
@@ -497,6 +522,7 @@ class IMPTPlan(Plan):
 
             # Ion Control Point Sequence (pair per layer to emulate: first with data, second with 0 weights/same positions)
             unique_energy_ids = np.unique(beam.spot_list[:, 3]).astype(int)
+            unique_energy_ids = unique_energy_ids[::-1]
             dcm_beam.IonControlPointSequence = []
             cumulative_mu = 0.0
             for layer_idx, energy_id in enumerate(unique_energy_ids):

@@ -11,6 +11,14 @@ class VolumeObject:
         self.voxel_data = []
 
 
+class Prescription:
+
+    def __init__(self):
+        self.TargetPrescriptionDose = 0.0
+        self.ROIName = None
+        self.TargetUnderdoseVolumeFraction = 0.0
+
+
 class DoseGrid:
 
     def __init__(self):
@@ -138,7 +146,7 @@ class DoseGrid:
 
         if individual_beams:
             for i, beam_dose in enumerate(self.beam_doses):
-                ref_dose = pyd.dcmread(ref_dose_path)
+                ref_dose = pyd.dcmread(ref_dose_path, force=True)
                 ref_dose.SeriesDescription = ref_dose.SeriesDescription + "_DoseCUDA"
                 ref_dose.DoseSummationType = "BEAM"
                 ref_dose.DoseType = dose_type
@@ -150,7 +158,7 @@ class DoseGrid:
 
                 ref_dose.save_as(dose_path.replace(".dcm", "_beam%02i.dcm" % (i+1)))
         else:
-            ref_dose = pyd.dcmread(ref_dose_path)
+            ref_dose = pyd.dcmread(ref_dose_path, force=True)
             ref_dose.SeriesDescription = ref_dose.SeriesDescription + "_DoseCUDA"
             ref_dose.DoseSummationType = "PLAN"
             ref_dose.DoseType = dose_type
@@ -239,6 +247,15 @@ class Plan:
         self.n_beams = 0
         self.n_fractions = 1
         self.beam_list = []
+        self.RTPlanLabel = None
+        self.Prescriptions = []
+
+    def addPrescription(self, TargetPrescriptionDose, ROIName, TargetUnderdoseVolumeFraction):
+        rx = Prescription()
+        rx.TargetPrescriptionDose = TargetPrescriptionDose
+        rx.ROIName = ROIName
+        rx.TargetUnderdoseVolumeFraction = TargetUnderdoseVolumeFraction
+        self.Prescriptions.append(rx)
 
     def addBeam(self, beam):
         self.beam_list.append(beam)
