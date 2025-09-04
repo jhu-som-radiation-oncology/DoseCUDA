@@ -378,10 +378,8 @@ class IMPTPlan(Plan):
         ds.SOPClassUID = RTIonPlanStorage
         ds.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
         ds.Modality       = 'RTPLAN'
-        if self.RTPlanLabel:
-            ds.RTPlanLabel    = self.RTPlanLabel
-        else:
-            ds.RTPlanLabel    = 'IMPT_PencilBeam'
+
+        ds.RTPlanLabel   = self.RTPlanLabel if self.RTPlanLabel else 'IMPT Plan'
         ds.RTPlanDate     = datetime.date.today().strftime('%Y%m%d')
         ds.RTPlanTime     = datetime.datetime.now().strftime('%H%M%S.%f')
         ds.RTPlanGeometry = 'PATIENT'
@@ -450,7 +448,8 @@ class IMPTPlan(Plan):
 
             dcm_beam = Dataset()
             dcm_beam.BeamNumber = i + 1
-            dcm_beam.BeamName = f'PBS_Beam{i + 1}'
+            dcm_beam.BeamName = beam.BeamName
+            dcm_beam.BeamDescription = beam.BeamDescription
             dcm_beam.BeamType = 'STATIC'
             dcm_beam.RadiationType = 'PROTON'
             dcm_beam.ScanMode = 'MODULATED_SPEC'
@@ -655,7 +654,13 @@ class IMPTPlan(Plan):
             beam.gantry_angle = float(ibs.IonControlPointSequence[0].GantryAngle)
             beam.couch_angle = float(ibs.IonControlPointSequence[0].PatientSupportAngle)
             beam.iso = np.array(ibs.IonControlPointSequence[0].IsocenterPosition, dtype=np.single)
-            
+
+            if hasattr(ibs, 'BeamName'):
+                beam.BeamName = ibs.BeamName
+
+            if hasattr(ibs, 'BeamDescription'):
+                beam.BeamDescription = ibs.BeamDescription
+
             for j in range(len(ibs.IonControlPointSequence)):
             
                 if j % 2 == 0:

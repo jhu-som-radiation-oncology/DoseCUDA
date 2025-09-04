@@ -239,6 +239,8 @@ class Beam:
         self.gantry_angle = 0.0
         self.collimator_angle = 0.0
         self.couch_angle = 0.0
+        self.BeamName = None
+        self.BeamDescription = None
 
 
 class Plan:
@@ -258,5 +260,9 @@ class Plan:
         self.Prescriptions.append(rx)
 
     def addBeam(self, beam):
+        if not beam.BeamName:
+            beam.BeamName = f'PBS_Beam{self.n_beams + 1}'
+        if not beam.BeamDescription:
+            beam.BeamDescription = f'PBS_Beam {self.n_beams + 1}'
         self.beam_list.append(beam)
         self.n_beams += 1
