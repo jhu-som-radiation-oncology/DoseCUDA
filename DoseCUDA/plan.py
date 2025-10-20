@@ -2,7 +2,18 @@ import numpy as np
 import SimpleITK as sitk
 import pydicom as pyd
 import pydicom.uid
-from .rtdose import RTDoseFactory
+from datetime import datetime
+import math
+
+
+def _create_uid(pt_id: str):
+    """Create a helpfully unique UID"""
+    ts = datetime.now().timestamp()
+    sub, sec = math.modf(ts)
+    idstr = "".join(c for c in pt_id if c.isnumeric())
+    pid = int(idstr) if idstr else 0
+    uid = f"{pydicom.uid.PYDICOM_ROOT_UID}{pid}.{int(sec)}.{int(sub * 1e6)}"
+    return pydicom.uid.UID(uid)
 
 
 class VolumeObject:
@@ -135,21 +146,6 @@ class DoseGrid:
 
     def streamDoseDCM(self, ref, dose_type="EFFECTIVE", individual_beams=False):
         """Flush the dose volume to a DICOM RTDose dataset"""
-        def stream_ref_rtdose(beam_dose, ref_dose, beam_num):
-            """Stream a buffer of pixel data into a DICOM dataset into memory"""
-            ref_dose.SeriesDescription = ref_dose.SeriesDescription + "_DoseCUDA"
-            ref_dose.DoseSummationType = "BEAM"
-            ref_dose.DoseType = dose_type
-            ref_dose.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID = pyd.uid.generate_uid()
-
-            scal = np.iinfo(np.uint16).max / np.max(beam_dose)
-            dose_dcm = np.array(beam_dose * scal * RBE, dtype=np.uint16)
-            ref_dose.PixelData = dose_dcm.tobytes()
-            ref_dose.DoseGridScaling = 1.0 / scal
-            ref_dose.PixelSpacing = [self.spacing[0], self.spacing[1]]
-
-            return ref_dose
-
         if dose_type == "EFFECTIVE":
             RBE = 1.1
         elif dose_type == "PHYSICAL":
@@ -160,19 +156,103 @@ class DoseGrid:
         if not isinstance(ref, pydicom.Dataset):
             ref = pyd.dcmread(ref, force=True)
 
+        # Optional tags
+        TAGS = [
+            "PatientName",
+            "PatientBirthDate",
+            "PatientBirthTime",
+            "PatientSex",
+            "StudyDate",
+            "StudyTime",
+            "AccessionNumber",
+            "StudyID",
+            "StudyDescription",
+            "ReferringPhysicianName",
+            "PatientAge",
+            "PatientSize",
+            "PatientWeight",
+            "BodyPartExamined",
+            "FrameOfReferenceUID",
+            "PositionReferenceIndicator"
+        ]
+
+        ts = datetime.now()
+        template = pydicom.Dataset()
+        template.SpecificCharacterSet  = r"ISO_IR 100"
+        template.SOPClassUID           = pydicom.uid.RTDoseStorage
+        template.Modality              = r"RTDOSE"
+        template.Manufacturer          = r"SKCCC"
+        template.ManufacturerModelName = r"DoseCUDA"
+        template.SoftwareVersions      = None
+        template.PatientID             = ref.PatientID
+        template.StudyInstanceUID      = ref.StudyInstanceUID
+        template.SeriesInstanceUID     = _create_uid(ref.PatientID)
+        template.SeriesDescription     = f"{ref.get('SeriesDescription') or ''}_DoseCUDA"
+        template.SeriesDate            = ts.date().strftime("%Y%m%d")
+        template.SeriesTime            = ts.time().strftime("%H%M%S.%f")
+        template.SeriesNumber          = None
+        template.OperatorsName         = None
+
+        for tag in TAGS:
+            setattr(template, tag, ref.get(tag))
+
+        template.InstanceCreationDate      = ts.date().strftime("%Y%m%d")
+        template.InstanceCreationTime      = ts.time().strftime("%H%M%S.%f")
+        template.SliceThickness            = self.spacing[0]
+        template.ImagePositionPatient      = [x for x in self.origin]
+        template.ImageOrientationPatient   = [1, 0, 0, 0, 1, 0]
+        template.SamplesPerPixel           = 1
+        template.PhotometricInterpretation = r"MONOCHROME2"
+        template.NumberOfFrames            = int(self.size[0])
+        template.FrameIncrementPointer     = (0x3004, 0x000c)
+        template.GridFrameOffsetVector     = [self.spacing[0] * i for i in range(0, self.size[0])]
+        template.Rows                      = int(self.size[1])
+        template.Columns                   = int(self.size[2])
+        template.PixelSpacing              = [self.spacing[1], self.spacing[2]]
+
+        ptype = np.uint16
+        signed = 1 if np.iinfo(ptype).min < 0 else 0
+        template.BitsAllocated          = np.iinfo(ptype).bits
+        template.BitsStored             = np.iinfo(ptype).bits
+        template.HighBit                = np.iinfo(ptype).bits - 1 - signed
+        template.PixelRepresentation    = signed
+
+        template.DoseUnits         = r"GY"
+        template.DoseType          = dose_type
+        template.DoseSummationType = r"BEAM" if individual_beams else r"PLAN"
+        template.TissueHeterogeneityCorrection = [r"IMAGE", r"ROI_OVERRIDE"]
+
+        template.ReferencedRTPlanSequence = pydicom.Sequence([pydicom.Dataset()])
         if ref.SOPClassUID == pydicom.uid.RTDoseStorage:
-            stream_function = stream_ref_rtdose
-        elif ref.SOPClassUID == pydicom.uid.RTIonPlanStorage:
-            fac = RTDoseFactory(ref)
-            stream_function = lambda dose, ref, inst: fac.create_rtdose(dose, self.origin, self.spacing, self.size, dose_type, inst)
+            template.ReferencedRTPlanSequence[0].ReferencedSOPClassUID = ref.get("ReferencedRTPlanSequence", [{ }])[0].get("ReferencedSOPClassUID")
+            template.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID = ref.get("ReferencedRTPlanSequence", [{ }])[0].get("ReferencedSOPInstanceUID")
+        elif ref.SOPClassUID == pydicom.uid.RTIonPlanStorage or ref.SOPClassUID == pydicom.uid.RTPlanStorage:
+            template.ReferencedRTPlanSequence[0].ReferencedSOPClassUID = ref.SOPClassUID
+            template.ReferencedRTPlanSequence[0].ReferencedSOPInstanceUID = ref.SOPInstanceUID
         else:
             raise Exception("DICOM template SOP class is invalid")
 
         if individual_beams:
-            for i, beam_dose in enumerate(self.beam_doses):
-                yield stream_function(beam_dose, ref, i + 1)
+            template.ReferencedRTPlanSequence[0].ReferencedFractionGroupSequence = pydicom.Sequence([pydicom.Dataset()])
+            template.ReferencedRTPlanSequence[0].ReferencedFractionGroupSequence[0].ReferencedFractionGroupNumber = 1
+            template.ReferencedRTPlanSequence[0].ReferencedFractionGroupSequence[0].ReferencedBeamSequence = pydicom.Sequence([pydicom.Dataset()])
+            beam_doses = self.beam_doses
         else:
-            yield stream_function(self.dose, ref, 0)
+            beam_doses = [self.dose]
+
+        for inst, beam_dose in enumerate(beam_doses):
+            template.SOPInstanceUID = _create_uid(template.PatientID)
+
+            if individual_beams:
+                template.ReferencedRTPlanSequence[0].ReferencedFractionGroupSequence[0].ReferencedBeamSequence[0].ReferencedBeamNumber = inst + 1
+                template.InstanceNumber = inst + 1
+            else:
+                template.InstanceNumber = None
+
+            scal = RBE * np.max(beam_dose) / float(np.iinfo(ptype).max)
+            template.DoseGridScaling = f"{scal:16g}"
+            template.PixelData = np.array(beam_dose * (RBE / scal), dtype=ptype).tobytes()
+            yield template
 
     def writeDoseDCM(self, dose_path, ref_dose_path, dose_type="EFFECTIVE", individual_beams=False):
 
