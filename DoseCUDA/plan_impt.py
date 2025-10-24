@@ -639,15 +639,15 @@ class IMPTPlan(Plan):
         else:
             ds = plan
 
-        n_beams = len(ds.IonBeamSequence)
         self.n_fractions = float(ds.FractionGroupSequence[0].NumberOfFractionsPlanned)
         self.beam_list = []
         self.n_beams = 0
 
-        for i in range(n_beams):
+        for ibs in ds.IonBeamSequence:
 
-            ibs = ds.IonBeamSequence[i]
-            
+            if ibs.get("RadiationType") != "PROTON":
+                continue
+
             beam = IMPTBeam()
 
             if ibs.NumberOfRangeShifters and ibs.RangeShifterSequence[0].RangeShifterID is not None:
