@@ -3,6 +3,7 @@ import SimpleITK as sitk
 import pydicom as pyd
 import pydicom.uid
 from datetime import datetime
+import copy
 import math
 
 
@@ -252,7 +253,7 @@ class DoseGrid:
             scal = RBE * np.max(beam_dose) / float(np.iinfo(ptype).max)
             template.DoseGridScaling = f"{scal:16g}"
             template.PixelData = np.array(beam_dose * (RBE / scal), dtype=ptype).tobytes()
-            yield template
+            yield copy.deepcopy(template)
 
     def writeDoseDCM(self, dose_path, ref_dose_path, dose_type="EFFECTIVE", individual_beams=False):
 
