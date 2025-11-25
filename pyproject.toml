@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core", "numpy < 2"]
+requires = ["scikit-build-core", "numpy"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -15,7 +15,7 @@ authors = [
 ]
 
 dependencies = [
-    "numpy < 2",
+    "numpy",
     "pydicom",
     "SimpleITK",
     "pandas",
