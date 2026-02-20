@@ -187,8 +187,7 @@ class IMPTDoseGrid(DoseGrid):
             try:           
                 model_index = list(plan.dicom_rangeshifter_label.astype(str)).index(beam.dicom_rangeshifter_label)
             except ValueError:
-                print("Beam model not found for rangeshifter ID %s" % beam.dicom_rangeshifter_label)
-                sys.exit(1)
+                raise RuntimeError("Beam model not found for rangeshifter ID %s" % beam.dicom_rangeshifter_label)
             beam_model = plan.beam_models[model_index]
 
             beam_wet = dose_kernels.proton_raytrace_cuda(beam_model, rlsp_object, beam, gpu_id)
@@ -306,8 +305,10 @@ class IMPTBeam(Beam):
 
     def addSpotData(self, cp, energy_id):
 
-        spm = np.reshape(np.array(cp.ScanSpotPositionMap), (-1, 2))
         mus = np.array(cp.ScanSpotMetersetWeights)
+        if not np.any(mus):
+            return
+        spm = np.reshape(np.array(cp.ScanSpotPositionMap), (-1, 2))
         energy_id_array = np.full(mus.size, energy_id)
 
         spot_list = np.array(np.column_stack((spm, mus, energy_id_array)), dtype=np.single)
@@ -666,13 +667,11 @@ class IMPTPlan(Plan):
                 beam.BeamDescription = ibs.BeamDescription
 
             for j in range(len(ibs.IonControlPointSequence)):
-            
-                if j % 2 == 0:
-            
-                    cp = ibs.IonControlPointSequence[j]
 
-                    energy_id = self.beam_models[0].energyIDFromLabel(float(cp.NominalBeamEnergy))
+                cp = ibs.IonControlPointSequence[j]
 
-                    beam.addSpotData(cp, energy_id)
+                energy_id = self.beam_models[0].energyIDFromLabel(float(cp.NominalBeamEnergy))
+
+                beam.addSpotData(cp, energy_id)
 
             self.addBeam(beam)
