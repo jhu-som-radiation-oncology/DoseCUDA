@@ -1,13 +1,19 @@
 from .plan import Plan, Beam, DoseGrid, VolumeObject
 import sys
 import os
-sys.path.append(os.path.dirname(__file__))
 import numpy as np
 import pandas as pd
 import pydicom as pyd
-import pkg_resources
-import dose_kernels
+import importlib.resources
+from . import dose_kernels
+from . import lookuptables
 from dataclasses import dataclass
+
+
+def resource_path(*segments):
+    ref = importlib.resources.files(lookuptables) / os.path.join(*segments)
+    return importlib.resources.as_file(ref)
+
 
 @dataclass
 class IMRTPhotonEnergy:
@@ -113,8 +119,8 @@ class IMRTDoseGrid(DoseGrid):
 
     def DensityFromHU(self, machine_name):
                 
-        density_table_path = pkg_resources.resource_filename(__name__, os.path.join("lookuptables", "photons", machine_name, "HU_Density.csv"))
-        df_density = pd.read_csv(density_table_path)
+        with resource_path("photons", machine_name, "HU_Density.csv") as density_table_path:
+            df_density = pd.read_csv(density_table_path)
 
         hu_curve = df_density["HU"].to_numpy()
         density_curve = df_density["Density"].to_numpy()
@@ -179,9 +185,10 @@ class IMRTPlan(Plan):
 
         self.machine_name = machine_name
 
-        energy_list = pd.read_csv(pkg_resources.resource_filename(__name__, os.path.join("lookuptables", "photons", machine_name, "energy_labels.csv")))
-        self.dicom_energy_label = energy_list["dicom_energy_label"]
-        self.folder_energy_label = energy_list["folder_energy_label"]
+        with resource_path("photons", machine_name, "energy_labels.csv") as energy_list_path:
+            energy_list = pd.read_csv(energy_list_path)
+            self.dicom_energy_label = energy_list["dicom_energy_label"]
+            self.folder_energy_label = energy_list["folder_energy_label"]
 
         self.beam_models = []
         for d, f in zip(self.dicom_energy_label, self.folder_energy_label):
@@ -191,11 +198,11 @@ class IMRTPlan(Plan):
 
     def _load_beam_model_parameters(self, beam_model, machine_name, folder_energy_label):
         """Load beam model parameters from lookup tables"""
-        path_to_model = os.path.join("lookuptables", "photons", machine_name)
+        path_to_model = os.path.join("photons", machine_name)
         
         # Load MLC geometry
-        mlc_geometry_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, "mlc_geometry.csv"))
-        mlc_geometry = pd.read_csv(mlc_geometry_path)
+        with resource_path(path_to_model, "mlc_geometry.csv") as mlc_geometry_path:
+            mlc_geometry = pd.read_csv(mlc_geometry_path)
         
         beam_model.mlc_index = mlc_geometry["mlc_pair_index"].to_numpy()
         beam_model.mlc_widths = mlc_geometry["width"].to_numpy()
@@ -203,17 +210,17 @@ class IMRTPlan(Plan):
         beam_model.n_mlc_pairs = len(beam_model.mlc_index)
 
         # Load kernel
-        kernel_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, folder_energy_label, "kernel.csv"))
-        kernel = pd.read_csv(kernel_path)
-        beam_model.kernel = np.array(kernel.to_numpy(), dtype=np.single)
+        with resource_path(path_to_model, folder_energy_label, "kernel.csv") as kernel_path:
+            kernel = pd.read_csv(kernel_path)
+            beam_model.kernel = np.array(kernel.to_numpy(), dtype=np.single)
 
         # Load machine geometry
-        machine_geometry_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, "machine_geometry.csv"))
-        self._load_machine_geometry(beam_model, machine_geometry_path)
+        with resource_path(path_to_model, "machine_geometry.csv") as machine_geometry_path:
+            self._load_machine_geometry(beam_model, machine_geometry_path)
 
         # Load beam parameters
-        beam_parameter_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, folder_energy_label, "beam_parameters.csv"))
-        self._load_beam_parameters(beam_model, beam_parameter_path)
+        with resource_path(path_to_model, folder_energy_label, "beam_parameters.csv") as beam_parameter_path:
+            self._load_beam_parameters(beam_model, beam_parameter_path)
 
         # Validate all parameters are loaded
         beam_model.validate_parameters()

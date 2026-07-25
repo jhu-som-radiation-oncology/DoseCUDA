@@ -1,17 +1,22 @@
 from .plan import Plan, Beam, DoseGrid, VolumeObject, Prescription
 import sys
 import os
-sys.path.append(os.path.dirname(__file__))
 import numpy as np
 import pandas as pd
 import pydicom as pyd
 from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.uid import generate_uid, ExplicitVRLittleEndian, RTIonPlanStorage
 import datetime
-import pkg_resources
-import dose_kernels
+import importlib.resources
+from . import dose_kernels
+from . import lookuptables
 import os
 import SimpleITK as sitk
+
+
+def resource_path(*segments):
+    ref = importlib.resources.files(lookuptables) / os.path.join(*segments)
+    return importlib.resources.as_file(ref)
 
 
 def get_roi_num(rt_ds, ROIName):
@@ -67,17 +72,17 @@ class IMPTBeamModel():
         self.dicom_rangeshifter_label = dicom_rangeshifter_label
 
         # import the machine geometry
-        machine_geometry_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, "machine_geometry.csv"))
-
         self.VSADX = None
         self.VSADY = None
 
-        for line in open(machine_geometry_path, "r"):
-            if line.startswith("VSADX"):
-                self.VSADX = float(line.split(',')[1])
-            
-            if line.startswith("VSADY"):
-                self.VSADY = float(line.split(',')[1])
+        with resource_path(path_to_model, "machine_geometry.csv") as machine_geometry_path:
+            with open(machine_geometry_path, "r") as fp:
+                for line in fp:
+                    if line.startswith("VSADX"):
+                        self.VSADX = float(line.split(',')[1])
+
+                    if line.startswith("VSADY"):
+                        self.VSADY = float(line.split(',')[1])
 
         if self.VSADX is None:
             raise Exception("VSADX not found in machine_geometry.csv")
@@ -87,8 +92,8 @@ class IMPTBeamModel():
 
 
         # import LUT for this rangeshifter
-        energy_list_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, folder_rangeshifter_label, "energies.csv"))
-        self.energy_table = pd.read_csv(energy_list_path)
+        with resource_path(path_to_model, folder_rangeshifter_label, "energies.csv") as energy_list_path:
+            self.energy_table = pd.read_csv(energy_list_path)
 
         self.energy_labels = self.energy_table["energy_label"].to_numpy()
         energy_ids = self.energy_table["index"].to_numpy()
@@ -105,25 +110,24 @@ class IMPTBeamModel():
             lut_sigmas = []
             lut_idds = []
             divergence_params = []
-            
-            lut_path = pkg_resources.resource_filename(__name__, os.path.join(path_to_model, folder_rangeshifter_label, "energy_%03d.csv" % energy_id))
 
-            with open(lut_path, "r") as f:
-                f.readline() # header
-                line = f.readline()
-                parts = line.split(",")
-                divergence_params = [float(part) for part in parts]
-                f.readline() # blank
-                f.readline() # header
-                k = 0 
-                for line in f:
-                    if k > 399:
-                        break
-                    k += 1
+            with resource_path(path_to_model, folder_rangeshifter_label, "energy_%03d.csv" % energy_id) as lut_path:
+                with open(lut_path, "r") as f:
+                    f.readline() # header
+                    line = f.readline()
                     parts = line.split(",")
-                    lut_depths.append(float(parts[0]))
-                    lut_sigmas.append(float(parts[1]))
-                    lut_idds.append(float(parts[2]))
+                    divergence_params = [float(part) for part in parts]
+                    f.readline() # blank
+                    f.readline() # header
+                    k = 0 
+                    for line in f:
+                        if k > 399:
+                            break
+                        k += 1
+                        parts = line.split(",")
+                        lut_depths.append(float(parts[0]))
+                        lut_sigmas.append(float(parts[1]))
+                        lut_idds.append(float(parts[2]))
             
             self.divergence_params.append(divergence_params)    
             self.lut_depths.append(lut_depths)
@@ -157,8 +161,8 @@ class IMPTDoseGrid(DoseGrid):
 
     def RLSPFromHU(self, machine_name):
 
-        rlsp_table_path = pkg_resources.resource_filename(__name__, os.path.join("lookuptables", "protons", machine_name, "HU_RLSP.csv"))
-        df_rlsp = pd.read_csv(rlsp_table_path)
+        with resource_path("protons", machine_name, "HU_RLSP.csv") as rlsp_table_path:
+            df_rlsp = pd.read_csv(rlsp_table_path)
 
         hu_curve = df_rlsp["HU"].to_numpy()
         rlsp_curve = df_rlsp["RLSP"].to_numpy()
@@ -334,13 +338,14 @@ class IMPTPlan(Plan):
         super().__init__()
         self.machine_name = machine_name
 
-        rangeshifter_list = pd.read_csv(pkg_resources.resource_filename(__name__, os.path.join("lookuptables", "protons", machine_name, "rangeshifter_labels.csv")))
-        self.dicom_rangeshifter_label = rangeshifter_list["dicom_rangeshifter_label"]
-        self.folder_rangeshifter_label = rangeshifter_list["folder_rangeshifter_label"]
+        with resource_path("protons", machine_name, "rangeshifter_labels.csv") as rangeshifter_path:
+            rangeshifter_list = pd.read_csv(rangeshifter_path)
+            self.dicom_rangeshifter_label = rangeshifter_list["dicom_rangeshifter_label"]
+            self.folder_rangeshifter_label = rangeshifter_list["folder_rangeshifter_label"]
 
         self.beam_models = []
         for d,f in zip(self.dicom_rangeshifter_label, self.folder_rangeshifter_label):
-            self.beam_models.append(IMPTBeamModel(d, os.path.join("lookuptables", "protons", machine_name), f))
+            self.beam_models.append(IMPTBeamModel(d, os.path.join("protons", machine_name), f))
 
     def load_ct_series(self, ct_dir):
         """Read all .dcm files in ct_dir and sort by InstanceNumber."""
