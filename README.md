@@ -14,7 +14,7 @@ Bhattacharya M, Reamy C, Li H, Lee J, Hrinivich WT. A Python package for fast GP
 
 ## Prerequisites
 Before installing DoseCUDA, ensure you have the following dependencies installed:
-- **Python 3.6+**
+- **Python 3.7+**
 - **CMake 3.15+**
 - **CUDA Toolkit** (Ensure you have a compatible version for your GPU)
 - **Git** (for cloning the repository)
@@ -23,7 +23,7 @@ Ensure that your GPU and CUDA drivers are properly set up before proceeding.
 
 ## Installation on Linux
 
-Linux builds were tested on Ubuntu 20.04.4 LTS and Debian 12.
+Linux builds were tested on Ubuntu 22.04.5 LTS and Debian 13.
 
 1. **Install Python** (if not already installed):
    ```
@@ -74,6 +74,8 @@ Linux builds were tested on Ubuntu 20.04.4 LTS and Debian 12.
 - **NVCC host compiler**: You can supply a host compiler override to pip by setting the environment variable `CUDAHOSTCXX` to the compiler command (e.g. `CUDAHOSTCXX=clang++`). Use this if your system's default is not supported.
 
 ## Installation on Windows
+
+#### Warning: This section is out of date
 
 Windows builds have only been tested with Visual Studio 2022 on Windows 11 Enterprise Edition.
 
